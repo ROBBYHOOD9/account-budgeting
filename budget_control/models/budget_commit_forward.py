@@ -188,7 +188,7 @@ class BudgetCommitForward(models.Model):
         return res
 
     def _do_forward_commit(self, reverse=False):
-        """ Cerate carry forward budget move to all related documents """
+        """ Create carry forward budget move to all related documents """
         self = self.sudo()
         for rec in self:
             for line in rec.forward_line_ids:
@@ -206,7 +206,9 @@ class BudgetCommitForward(models.Model):
                     line.to_analytic_account_id.bm_date_to = (
                         rec.to_budget_period_id.bm_date_to
                     )
-                line.document_id.recompute_budget_move()
+            # Recompute budget on document number
+            for document in list(set(rec.forward_line_ids.mapped("document_number"))):
+                document.recompute_budget_move()
 
     def _do_update_initial_commit(self):
         """ Update all Analytic Account's initial commit value related to budget period """

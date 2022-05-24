@@ -1,5 +1,6 @@
 # Copyright 2020 Ecosoft Co., Ltd. (http://ecosoft.co.th)
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
+
 from odoo import api, fields, models
 
 
@@ -12,14 +13,30 @@ class HRExpenseSheet(models.Model):
     )
 
     def write(self, vals):
-        """ Clearing for its Advance """
+        """ Clearing for its Advance and Cancel payment expense """
+        doc_cancel = self.filtered(lambda l: l.state == "cancel")
         res = super().write(vals)
         if vals.get("state") in ("approve", "cancel"):
             # If this is a clearing, return commit to the advance
             advances = self.mapped("advance_sheet_id.expense_line_ids")
             if advances:
                 advances.recompute_budget_move()
+        # Support with module `hr_expense_cancel` if you change state cancel to post
+        if vals.get("state") == "post" and doc_cancel:
+            doc_cancel.mapped("expense_line_ids").recompute_budget_move()
         return res
+
+    def _prepare_clear_advance(self, line):
+        """ Cleaing after carry forward Advance """
+        clearing_dict = super()._prepare_clear_advance(line)
+        if clearing_dict.get("analytic_account_id") and clearing_dict.get(
+            "fwd_analytic_account_id"
+        ):
+            clearing_dict["analytic_account_id"] = clearing_dict[
+                "fwd_analytic_account_id"
+            ]
+            clearing_dict["date_commit"] = False
+        return clearing_dict
 
 
 class HRExpense(models.Model):
@@ -62,14 +79,17 @@ class HRExpense(models.Model):
         return move_grouped_by_sheet
 
     def recompute_budget_move(self):
-        # Keep value return advance (if any)
+        # Keep value return advance (Not include case carry commitment)
         budget_moves = self.env["advance.budget.move"]
-        return_advances = budget_moves.search(
-            [("sheet_id", "=", self.sheet_id.id), ("move_line_id", "!=", False)]
-        )
-        return_budget_moves = [
-            (x.move_line_id, x.amount_currency, x.expense_id) for x in return_advances
-        ]
+        return_budget_moves = []
+        if self._context.get("model") != "budget.commit.forward":
+            return_advances = budget_moves.search(
+                [("sheet_id", "=", self.sheet_id.id), ("move_line_id", "!=", False)]
+            )
+            return_budget_moves = [
+                (x.move_line_id, x.amount_currency, x.expense_id)
+                for x in return_advances
+            ]
         # Expenses
         expenses = self.filtered(lambda l: not l.advance)
         super(HRExpense, expenses).recompute_budget_move()
@@ -88,6 +108,18 @@ class HRExpense(models.Model):
             expense.commit_budget(
                 reverse=True, amount_currency=amount, move_line_id=move_line.id
             )
+        # Only when advance is over returned, do close_budget_move() to final adjust
+        # Note: now, we only found case in Advance / Return / Clearing case
+        advance_budget_moves = self.filtered("advance_budget_move_ids.adj_commit")
+        for sheet in advance_budget_moves.mapped("sheet_id"):
+            # And only if some adjustment has occured
+            adj_moves = sheet.advance_budget_move_ids.filtered("adj_commit")
+            moves = sheet.advance_budget_move_ids - adj_moves
+            # If adjust > over returned
+            adjusted = sum(adj_moves.mapped("debit"))
+            over_returned = sum(moves.mapped(lambda l: l.credit - l.debit))
+            if adjusted > over_returned:
+                sheet.close_budget_move()
 
     def close_budget_move(self):
         # Expenses
