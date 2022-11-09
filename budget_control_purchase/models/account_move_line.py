@@ -1,5 +1,6 @@
 # Copyright 2020 Ecosoft Co., Ltd. (http://ecosoft.co.th)
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
+
 from odoo import models
 
 
@@ -32,7 +33,11 @@ class AccountMoveLine(models.Model):
                             return_amount_commit=ml.amount_commit
                         )
                     purchase_line.commit_budget(
-                        reverse=rev, move_line_id=ml.id, product_qty=qty
+                        reverse=rev,
+                        move_line_id=ml.id,
+                        analytic_account_id=ml.analytic_account_id,
+                        product_qty=qty,
+                        date=ml.date_commit,
                     )
                 else:  # Cancel or draft, not commitment line
                     self.env["purchase.budget.move"].search(
